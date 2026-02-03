@@ -26,6 +26,8 @@
 ;; Declare flycheck functions to avoid byte-compilation warnings
 (declare-function flycheck-error-line "flycheck")
 (declare-function flycheck-error-column "flycheck")
+(declare-function flycheck-error-end-line "flycheck")
+(declare-function flycheck-error-end-column "flycheck")
 (declare-function flycheck-error-level "flycheck")
 (declare-function flycheck-error-message "flycheck")
 (declare-function flycheck-error-id "flycheck")
@@ -40,7 +42,7 @@
   "Error structure for flyover that works independently of flycheck.
 This allows flyover to work with either flycheck, flymake, or both
 without requiring flycheck to be installed."
-  line column level message id)
+  line column beg end level message id)
 
 (defgroup flyover nil
   "Display Flycheck/Flymake errors using overlays."
@@ -236,11 +238,13 @@ Available modes:
 - `always': Always show all error overlays (default behavior)
 - `hide-on-same-line': Hide overlays when cursor is on the same line as the error
 - `hide-at-exact-position': Hide overlays when cursor is at the exact position of the error
-- `show-only-on-same-line': Only show overlays for errors on the current line"
+- `show-only-on-same-line': Only show overlays for errors on the current line
+- `show-only-on-request': Only show when requested by `flyover-flash-error-at-point'"
   :type '(choice (const :tag "Always show overlays" always)
                  (const :tag "Hide when cursor on same line" hide-on-same-line)
                  (const :tag "Hide when cursor at exact position" hide-at-exact-position)
-                 (const :tag "Show only on current line" show-only-on-same-line))
+                 (const :tag "Show only on current line" show-only-on-same-line)
+                 (const :tat "Show only on request" show-only-on-request))
   :group 'flyover)
 
 ;; Obsolete variables for backward compatibility
@@ -570,6 +574,7 @@ BG-COLOR is the overlay background color."
   "Convert a Flymake DIAG to flyover-error format.
 Only converts diagnostics whose level is in `flyover-levels'."
   (when-let* ((beg (flymake-diagnostic-beg diag))
+              (end (flymake-diagnostic-end diag))
               (type (flymake-diagnostic-type diag))
               (text (flymake-diagnostic-text diag))
               (level (flyover--flymake-type-to-level type)))
@@ -580,9 +585,38 @@ Only converts diagnostics whose level is in `flyover-levels'."
        :column (save-excursion
                  (goto-char beg)
                  (current-column))
+       :beg beg
+       :end end
        :level level
        :message text
        :id nil))))
+
+(defun flyover--flycheck-error-begin (err)
+  "Determine the starting position of ERR."
+  (let ((column (when-let* ((col (flycheck-error-column err))) (1- col))))
+    (save-excursion
+      (forward-line (- (flycheck-error-line err) (line-number-at-pos)))
+      (if column
+          (move-to-column column)
+        (end-of-line)
+        (beginning-of-visual-line)
+        (while (looking-at "[[:space:]]")
+          (forward-char)))
+      (point))))
+
+(defun flyover--flycheck-error-end (err)
+  "Determine the end position of ERR."
+  (if-let* ((error-end-line (flycheck-error-end-line err))
+            (error-end-col (flycheck-error-end-column err)))
+      (+ error-end-col (pos-bol (1+ (- error-end-line (line-number-at-pos)))))
+      (save-excursion
+          (goto-char (flyover--flycheck-error-begin err))
+          (if (flycheck-error-column err)
+              (end-of-thing 'symbol)
+            (end-of-visual-line)
+            (while (looking-at "[[:space:]]")
+              (backward-char))
+          (point)))))
 
 (defun flyover--convert-flycheck-error (err)
   "Convert a Flycheck ERR to flyover-error format."
@@ -594,6 +628,8 @@ Only converts diagnostics whose level is in `flyover-levels'."
          ;; Flycheck columns are 1-based, convert to 0-based for consistency
          :column (when-let* ((col (flycheck-error-column err)))
                    (max 0 (1- col)))
+         :beg (flyover--flycheck-error-begin err)
+         :end (flyover--flycheck-error-end err)
          :level level
          :message (flycheck-error-message err)
          :id (condition-case nil
@@ -1337,7 +1373,8 @@ STATUS is the new flycheck status."
   ;; Use the cursor-specific debounce function for smoother navigation
   (when (memq flyover-display-mode '(show-only-on-same-line
                                      hide-on-same-line
-                                     hide-at-exact-position))
+                                     hide-at-exact-position
+                                     show-only-on-request))
     (flyover--safe-add-hook 'post-command-hook
                             #'flyover--cursor-display-debounced))
   ;; Add completion detection hook when hide-during-completion is enabled
@@ -1439,11 +1476,11 @@ STATUS is the new flycheck status."
                ;; Only create overlays if there are errors on current line
                (when current-line-errors
                  (flyover--display-errors current-line-errors))))))
-        
+
         ;; Always show all errors (default)
         ('always
          (flyover--display-errors))
-        
+
         ;; Hide errors on the same line as cursor
         ('hide-on-same-line
          (flyover--display-errors)
@@ -1470,7 +1507,14 @@ STATUS is the new flycheck status."
          ;; Delete collected overlays
          (dolist (ov to-delete)
            (delete-overlay ov)
-           (setq flyover--overlays (delq ov flyover--overlays))))))))))) ;; close: pcase, let, unless, t-clause, cond, let)
+           (setq flyover--overlays (delq ov flyover--overlays))))
+
+        ;; Delete all overlays and errors that were shown on request and  need no longer be shown
+        ('show-only-on-request
+         (dolist (ov flyover--overlays)
+           (unless (flyover--error-at-point-p (overlay-get ov 'flyover-error))
+             (delete-overlay ov)
+             (setq flyover--overlays nil))))))))))) ;; close: pcase, let, unless, t-clause, cond, let)
 
 (defun flyover--maybe-display-errors-debounced (&rest _)
   "Debounced version of `flyover--maybe-display-errors'."
@@ -1727,6 +1771,24 @@ Called from `post-command-hook' when `flyover-hide-during-completion' is enabled
       (if completion-active
           (flyover--hide-overlays-for-completion)
         (flyover--show-overlays-after-completion)))))
+
+(defun flyover--error-at-point-p (err)
+  "Non-nil if error ERR is at current point."
+  (and (>= (point) (flyover-error-beg err))
+       (< (point) (flyover-error-end err))))
+
+(defun flyover--errors-at-point ()
+  "Return all errors at current point."
+  (seq-filter #'flyover--error-at-point-p (flyover--get-all-errors)))
+
+(defun flyover-flash-error-at-point ()
+  "Display error at current point."
+  (interactive)
+  (if flyover-mode
+      (and-let* (((eq flyover-display-mode 'show-only-on-request))
+                  (errors (flyover--errors-at-point)))
+        (flyover--display-errors errors))
+    (message "flyover-mode is disabled; not displaying errors.")))
 
 (provide 'flyover)
 ;;; flyover.el ends here

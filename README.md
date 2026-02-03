@@ -8,7 +8,7 @@
     <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/flyover_logo.png" alt="Flyover logo" height="300" width="300">
 </picture>
 
-A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyover is a full featured package with tons of features for you to customize. 
+A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyover is a full featured package with tons of features for you to customize.
 
 ## Features
 
@@ -332,6 +332,11 @@ Control when overlays are shown based on cursor position using `flyover-display-
 ;; Only show overlays for errors on the current line
 ;; Useful for focusing on one error at a time
 (setq flyover-display-mode 'show-only-on-same-line)
+
+;; Only show the error at current point – if any ­ on request using `flyover-flash-error-at-point`
+;; Useful when you want to control the display of the errors yourself.
+;; Map the function `flyover-flash-error-at-point` to a convenient key.
+(setq flyover-display-mode 'show-only-on-request)
 ```
 
 | Mode | Description |
@@ -340,6 +345,7 @@ Control when overlays are shown based on cursor position using `flyover-display-
 | `hide-on-same-line` | Hide overlays when cursor is on the same line |
 | `hide-at-exact-position` | Hide overlays only at exact error position |
 | `show-only-on-same-line` | Only show errors on the current line |
+| `show-only-on-request`   | Only show errors when requested using `flyover-flash-error-at-point` |
 
 **Note:** The old variables `flyover-hide-when-cursor-is-on-same-line` and `flyover-show-only-when-on-same-line` are deprecated. Use `flyover-display-mode` instead.
 
@@ -447,7 +453,7 @@ emacs -batch -l flyover.el -l flycheck-overlay-test.el -f ert-run-tests-batch-an
 ### Test Coverage
 
 - Message wrapping with various lengths
-- Multi-line display functionality  
+- Multi-line display functionality
 - Line position offset behavior
 - Edge cases (empty messages, single words, exact lengths)
 - Integration with flycheck error objects
@@ -470,4 +476,3 @@ emacs -batch -l flyover.el -l flycheck-overlay-test.el -f ert-run-tests-batch-an
 ## Author
 
 Mikael Konradsson <mikael.konradsson@outlook.com>
-  
